@@ -1,0 +1,35 @@
+{
+  "timeZone": "Etc/UTC",
+  "urlFetchWhitelist": [
+    "https://script.google.com/"
+  ],
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/gmail.addons.current.message.readonly",
+    "https://www.googleapis.com/auth/gmail.addons.execute",
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/userinfo.email"
+  ],
+  "runtimeVersion": "V8",
+  "addOns": {
+    "common": {
+      "name": "Odoo CRM",
+      "logoUrl": "https://raw.githubusercontent.com/odoo/odoo/17.0/addons/crm/static/description/icon.png",
+      "layoutProperties": {
+        "primaryColor": "#875A7B",
+        "secondaryColor": "#FFFFFF"
+      },
+      "openLinkUrlPrefixes": [
+        "https://script.google.com/",
+        "https://www.google.com/"
+      ]
+    },
+    "gmail": {
+      "contextualTriggers": [
+        {
+          "unconditional": {},
+          "onTriggerFunction": "buildAddOn"
+        }
+      ]
+    }
+  }
+}
