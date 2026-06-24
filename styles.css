@@ -1,0 +1,74 @@
+:root {
+  font-family: Arial, sans-serif;
+  color: #202124;
+}
+body {
+  width: 390px;
+  margin: 0;
+  padding: 12px;
+}
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+input, textarea, button {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+}
+input, textarea {
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+button {
+  padding: 10px;
+  background: #1a73e8;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+button:hover {
+  background: #1669c1;
+}
+.status {
+  padding: 8px;
+  margin-top: 8px;
+  background: #f7f7f7;
+  border-radius: 6px;
+}
+.status.error {
+  background: #fdecea;
+  color: #b00020;
+}
+.lead-card {
+  padding: 12px;
+  margin: 10px 0;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+}
+.lead-card h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+.lead-card p {
+  margin: 4px 0;
+}
+.actions {
+  margin-top: 10px;
+}
+.actions label {
+  font-size: 12px;
+  margin-top: 8px;
+  display: block;
+}
+.actions textarea {
+  min-height: 70px;
+}
+.empty {
+  padding: 12px;
+  color: #555;
+}

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Odoo CRM Gmail Connector</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Odoo Gmail CRM</h1>
+    <section>
+      <label>Proxy URL</label>
+      <input id="proxyUrl" type="url" placeholder="https://your-proxy.example.com" />
+      <label>Odoo DB</label>
+      <input id="odooDb" list="dbList" type="text" placeholder="your_db_name" />
+      <datalist id="dbList"></datalist>
+      <button id="loadDbs">Load available DBs</button>
+      <label>Odoo Username</label>
+      <input id="odooLogin" type="email" placeholder="user@example.com" />
+      <label>Odoo API Key</label>
+      <input id="odooApiKey" type="password" placeholder="API key" />
+      <button id="saveConfig">Save Config</button>
+      <button id="authBtn">Authenticate to Odoo</button>
+      <div id="configStatus" class="status"></div>
+    </section>
+    <section>
+      <button id="refreshLeads">Refresh leads for current email</button>
+      <div id="senderInfo" class="status"></div>
+      <div id="leadsList"></div>
+    </section>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
