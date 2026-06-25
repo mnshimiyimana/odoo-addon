@@ -156,13 +156,18 @@ function showLeads(e, config) {
         : (rawProb >= 70 ? '↑ ' : rawProb >= 30 ? '→ ' : '↓ ') + rawProb + '%';
       var rawRev   = lead.expected_revenue;
       var revenue  = rawRev ? '$' + Number(rawRev).toLocaleString() : '—';
-      var salesp   = Array.isArray(lead.user_id) ? lead.user_id[1] : 'Unassigned';
+      var badge    = activityBadge(lead.activity_state);
       leadsSection.addWidget(
         CardService.newDecoratedText()
           .setStartIcon(CardService.newIconImage().setIcon(CardService.Icon.BOOKMARK))
-          .setTopLabel('◆  ' + stage)
+          .setTopLabel('◆  ' + stage + (badge ? '   ' + badge : ''))
           .setText('<b>' + lead.name + '</b>')
-          .setBottomLabel(probStr + '   ·   ' + revenue + '   ·   ' + salesp)
+          .setBottomLabel(probStr + '   ·   ' + revenue)
+          .setOnClickAction(
+            CardService.newAction()
+              .setFunctionName('showLeadDetail')
+              .setParameters({ id: String(lead.id) })
+          )
           .setButton(
             CardService.newImageButton()
               .setIcon(CardService.Icon.DESCRIPTION)
@@ -194,6 +199,282 @@ function openLeadInOdoo(e) {
         .setOnClose(CardService.OnClose.NOTHING)
     )
     .build();
+}
+
+// ── Lead detail: view + edit fields, full activity management ──────────────────
+
+function showLeadDetail(e) {
+  var config = getConfig();
+  var leadId = e.commonEventObject.parameters.id;
+  var nav = CardService.newNavigation().pushCard(buildLeadDetailCard(config, leadId));
+  return CardService.newActionResponseBuilder().setNavigation(nav).build();
+}
+
+function buildLeadDetailCard(config, leadId) {
+  var idNum = parseInt(leadId, 10);
+  var readRes = odooExecute(config, 'crm.lead', 'read', [[idNum]],
+    { fields: ['name', 'stage_id', 'probability', 'expected_revenue', 'date_deadline'] });
+  if (readRes.error) return createErrorCard('Could not load opportunity: ' + readRes.error);
+  var lead = (readRes.value && readRes.value[0]) || null;
+  if (!lead) return createErrorCard('Opportunity not found.');
+
+  var stage = Array.isArray(lead.stage_id) ? lead.stage_id[1] : '';
+  var prob  = lead.probability != null ? Math.round(lead.probability) + '%' : '';
+  var card = CardService.newCardBuilder()
+    .setHeader(CardService.newCardHeader()
+      .setTitle(lead.name || 'Opportunity')
+      .setSubtitle((stage || '') + (prob ? '  ·  ' + prob : '')));
+
+  // ── Editable fields ──
+  var editSection = CardService.newCardSection().setHeader('Details');
+  editSection.addWidget(
+    CardService.newTextInput()
+      .setFieldName('expected_revenue')
+      .setTitle('Expected revenue')
+      .setValue(lead.expected_revenue != null ? String(lead.expected_revenue) : '')
+  );
+  var datePicker = CardService.newDatePicker()
+    .setFieldName('date_deadline')
+    .setTitle('Expected closing');
+  if (lead.date_deadline) datePicker.setValueInMsSinceEpoch(dateStrToMs(lead.date_deadline));
+  editSection.addWidget(datePicker);
+  editSection.addWidget(
+    CardService.newTextButton()
+      .setText('Save changes')
+      .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+      .setOnClickAction(CardService.newAction().setFunctionName('saveLeadDetails').setParameters({ id: String(leadId) }))
+  );
+  card.addSection(editSection);
+
+  // ── Activities (late / pending / upcoming) ──
+  var acts = getLeadActivities(config, idNum);
+  var actSection = CardService.newCardSection().setHeader('Activities');
+  if (acts.error) {
+    actSection.addWidget(CardService.newTextParagraph().setText('<font color="#c5221f">' + acts.error + '</font>'));
+  } else if (!acts.list.length) {
+    actSection.addWidget(CardService.newTextParagraph().setText('<font color="#5f6368">No scheduled activities.</font>'));
+  } else {
+    acts.list.forEach(function(a) {
+      var type    = Array.isArray(a.activity_type_id) ? a.activity_type_id[1] : 'Activity';
+      var who     = Array.isArray(a.user_id) ? a.user_id[1] : '';
+      var due     = a.date_deadline || '';
+      var badge   = activityBadge(a.state) || (a.state || '');
+      var summary = a.summary || type;
+      actSection.addWidget(
+        CardService.newDecoratedText()
+          .setTopLabel(badge + (due ? '   ·   due ' + due : ''))
+          .setText('<b>' + summary + '</b>')
+          .setBottomLabel(type + (who ? '   ·   ' + who : ''))
+          .setWrapText(true)
+      );
+      actSection.addWidget(
+        CardService.newButtonSet()
+          .addButton(CardService.newTextButton().setText('Mark done')
+            .setOnClickAction(CardService.newAction().setFunctionName('openActivityDone')
+              .setParameters({ id: String(leadId), actId: String(a.id), summary: summary })))
+          .addButton(CardService.newTextButton().setText('Reschedule')
+            .setOnClickAction(CardService.newAction().setFunctionName('openActivityReschedule')
+              .setParameters({ id: String(leadId), actId: String(a.id), summary: summary, due: due || '' })))
+      );
+    });
+  }
+  card.addSection(actSection);
+
+  // ── Schedule a new activity ──
+  var newSection = CardService.newCardSection().setHeader('Schedule activity');
+  var typeRes = odooExecute(config, 'mail.activity.type', 'search_read',
+    [['|', ['res_model', '=', false], ['res_model', '=', 'crm.lead']]], { fields: ['name'], limit: 50 });
+  var typeInput = CardService.newSelectionInput()
+    .setType(CardService.SelectionInputType.DROPDOWN)
+    .setFieldName('new_activity_type')
+    .setTitle('Type');
+  if (!typeRes.error && typeRes.value && typeRes.value.length) {
+    typeRes.value.forEach(function(t, i) { typeInput.addItem(t.name, String(t.id), i === 0); });
+  } else {
+    typeInput.addItem('To Do', '0', true);
+  }
+  newSection.addWidget(typeInput);
+  newSection.addWidget(CardService.newDatePicker().setFieldName('new_activity_date').setTitle('Due date'));
+  newSection.addWidget(CardService.newTextInput().setFieldName('new_activity_summary').setTitle('Summary').setHint('What needs doing?'));
+  newSection.addWidget(
+    CardService.newTextButton().setText('Schedule')
+      .setOnClickAction(CardService.newAction().setFunctionName('scheduleActivity').setParameters({ id: String(leadId) }))
+  );
+  card.addSection(newSection);
+
+  // ── Open in Odoo ──
+  var footSection = CardService.newCardSection();
+  footSection.addWidget(
+    CardService.newTextButton().setText('Open in Odoo')
+      .setOnClickAction(CardService.newAction().setFunctionName('openLeadInOdoo').setParameters({ id: String(leadId) }))
+  );
+  card.addSection(footSection);
+
+  return card.build();
+}
+
+function getLeadActivities(config, leadId) {
+  var res = odooExecute(config, 'mail.activity', 'search_read',
+    [[['res_model', '=', 'crm.lead'], ['res_id', '=', leadId]]],
+    { fields: ['activity_type_id', 'summary', 'date_deadline', 'user_id', 'state'], order: 'date_deadline asc' });
+  if (res.error) return { error: res.error };
+  return { list: res.value || [] };
+}
+
+function saveLeadDetails(e) {
+  var config = getConfig();
+  var leadId = parseInt(e.commonEventObject.parameters.id, 10);
+  var inputs = e.commonEventObject.formInputs || {};
+  var vals = {};
+  var revStr = getFormValue(inputs, 'expected_revenue').trim();
+  if (revStr !== '') {
+    var rev = Number(revStr.replace(/[^0-9.\-]/g, ''));
+    if (!isNaN(rev)) vals.expected_revenue = rev;
+  }
+  var ms = getDatePickerMs(e, 'date_deadline');
+  if (ms != null) vals.date_deadline = msToDateStr(ms);
+
+  if (Object.keys(vals).length === 0) return detailToast(config, String(leadId), 'Nothing to save');
+  var res = odooExecute(config, 'crm.lead', 'write', [[leadId], vals]);
+  return detailToast(config, String(leadId), res.error ? ('Save failed: ' + res.error) : 'Saved');
+}
+
+function openActivityDone(e) {
+  var p = e.commonEventObject.parameters;
+  var card = CardService.newCardBuilder()
+    .setHeader(CardService.newCardHeader().setTitle('Mark done').setSubtitle(p.summary || ''));
+  var s = CardService.newCardSection();
+  s.addWidget(CardService.newTextInput().setFieldName('done_note').setTitle('Note (optional)').setMultiline(true).setHint('Logged on the activity'));
+  s.addWidget(CardService.newButtonSet()
+    .addButton(CardService.newTextButton().setText('Confirm done').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+      .setOnClickAction(CardService.newAction().setFunctionName('markActivityDone').setParameters({ id: p.id, actId: p.actId })))
+    .addButton(CardService.newTextButton().setText('Cancel')
+      .setOnClickAction(CardService.newAction().setFunctionName('cancelSub'))));
+  card.addSection(s);
+  var nav = CardService.newNavigation().pushCard(card.build());
+  return CardService.newActionResponseBuilder().setNavigation(nav).build();
+}
+
+function markActivityDone(e) {
+  var config = getConfig();
+  var p = e.commonEventObject.parameters;
+  var inputs = e.commonEventObject.formInputs || {};
+  var note = getFormValue(inputs, 'done_note').trim();
+  var res = odooExecute(config, 'mail.activity', 'action_feedback', [[parseInt(p.actId, 10)]], note ? { feedback: note } : {});
+  return subToast(config, p.id, res.error ? ('Could not mark done: ' + res.error) : 'Activity completed');
+}
+
+function openActivityReschedule(e) {
+  var p = e.commonEventObject.parameters;
+  var card = CardService.newCardBuilder()
+    .setHeader(CardService.newCardHeader().setTitle('Reschedule').setSubtitle(p.summary || ''));
+  var s = CardService.newCardSection();
+  var dp = CardService.newDatePicker().setFieldName('reschedule_date').setTitle('New due date');
+  if (p.due) dp.setValueInMsSinceEpoch(dateStrToMs(p.due));
+  s.addWidget(dp);
+  s.addWidget(CardService.newButtonSet()
+    .addButton(CardService.newTextButton().setText('Save date').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+      .setOnClickAction(CardService.newAction().setFunctionName('rescheduleActivity').setParameters({ id: p.id, actId: p.actId })))
+    .addButton(CardService.newTextButton().setText('Cancel')
+      .setOnClickAction(CardService.newAction().setFunctionName('cancelSub'))));
+  card.addSection(s);
+  var nav = CardService.newNavigation().pushCard(card.build());
+  return CardService.newActionResponseBuilder().setNavigation(nav).build();
+}
+
+function rescheduleActivity(e) {
+  var config = getConfig();
+  var p = e.commonEventObject.parameters;
+  var ms = getDatePickerMs(e, 'reschedule_date');
+  if (ms == null) return subToast(config, p.id, 'No date selected');
+  var res = odooExecute(config, 'mail.activity', 'write', [[parseInt(p.actId, 10)], { date_deadline: msToDateStr(ms) }]);
+  return subToast(config, p.id, res.error ? ('Reschedule failed: ' + res.error) : 'Rescheduled');
+}
+
+function scheduleActivity(e) {
+  var config = getConfig();
+  var leadId = parseInt(e.commonEventObject.parameters.id, 10);
+  var inputs = e.commonEventObject.formInputs || {};
+  var typeId  = parseInt(getFormValue(inputs, 'new_activity_type') || '0', 10);
+  var summary = getFormValue(inputs, 'new_activity_summary').trim();
+  var ms = getDatePickerMs(e, 'new_activity_date');
+
+  if (!ms) return detailToast(config, String(leadId), 'Pick a due date first');
+
+  if (!typeId) {
+    var tr = odooExecute(config, 'mail.activity.type', 'search_read',
+      [['|', ['res_model', '=', false], ['res_model', '=', 'crm.lead']]], { fields: ['id'], limit: 1 });
+    if (!tr.error && tr.value && tr.value.length) typeId = tr.value[0].id;
+  }
+  if (!typeId) return detailToast(config, String(leadId), 'No activity types available in Odoo');
+
+  // mail.activity needs res_model_id (an ir.model id), not the model string.
+  var modelRes = odooExecute(config, 'ir.model', 'search_read', [[['model', '=', 'crm.lead']]], { fields: ['id'], limit: 1 });
+  if (modelRes.error || !modelRes.value || !modelRes.value.length) {
+    return detailToast(config, String(leadId), 'Could not resolve crm.lead model');
+  }
+  var vals = {
+    res_model_id: modelRes.value[0].id,
+    res_id: leadId,
+    activity_type_id: typeId,
+    date_deadline: msToDateStr(ms)
+  };
+  if (summary) vals.summary = summary;
+  var res = odooExecute(config, 'mail.activity', 'create', [vals]);
+  return detailToast(config, String(leadId), res.error ? ('Schedule failed: ' + res.error) : 'Activity scheduled');
+}
+
+function cancelSub(e) {
+  return CardService.newActionResponseBuilder()
+    .setNavigation(CardService.newNavigation().popCard())
+    .build();
+}
+
+// Rebuild + replace the current detail card, with a toast.
+function detailToast(config, leadId, msg) {
+  var nav = CardService.newNavigation().updateCard(buildLeadDetailCard(config, leadId));
+  return CardService.newActionResponseBuilder()
+    .setNavigation(nav)
+    .setNotification(CardService.newNotification().setText(msg))
+    .build();
+}
+
+// Pop a sub-card, then refresh the detail card beneath it, with a toast.
+function subToast(config, leadId, msg) {
+  var nav = CardService.newNavigation().popCard().updateCard(buildLeadDetailCard(config, leadId));
+  return CardService.newActionResponseBuilder()
+    .setNavigation(nav)
+    .setNotification(CardService.newNotification().setText(msg))
+    .build();
+}
+
+function activityBadge(state) {
+  if (state === 'overdue') return '<font color="#c5221f">⚠ overdue</font>';
+  if (state === 'today')   return '<font color="#e37400">● today</font>';
+  if (state === 'planned') return '<font color="#1a73e8">○ planned</font>';
+  return '';
+}
+
+// Date helpers — Odoo dates are 'YYYY-MM-DD'; CardService pickers use ms-since-epoch (UTC).
+function dateStrToMs(s) {
+  if (!s) return null;
+  var p = String(s).split(/[-T :]/);
+  return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+}
+
+function msToDateStr(ms) {
+  return Utilities.formatDate(new Date(Number(ms)), 'UTC', 'yyyy-MM-dd');
+}
+
+function getDatePickerMs(e, field) {
+  try {
+    var fi = e.commonEventObject.formInputs[field];
+    if (!fi) return null;
+    var d = fi.dateInput || fi.dateTimeInput;
+    if (d && d.msSinceEpoch != null) return Number(d.msSinceEpoch);
+    if (Array.isArray(fi.dateInput) && fi.dateInput[0]) return Number(fi.dateInput[0].msSinceEpoch);
+    return null;
+  } catch (err) { return null; }
 }
 
 function doSignIn(e) {
@@ -406,10 +687,19 @@ function xmlrpcSearchLeads(config, sender) {
     'execute_kw',
     [config.db, config.uid, config.sessionToken,
      'crm.lead', 'search_read', [domain],
-     { fields: ['name', 'stage_id', 'expected_revenue', 'probability', 'user_id'], limit: 50 }]
+     { fields: ['name', 'stage_id', 'expected_revenue', 'probability', 'user_id', 'date_deadline', 'activity_state'], limit: 50 }]
   );
   if (result.error) return { error: result.error };
   return { leads: result.value || [] };
+}
+
+// Generic execute_kw wrapper — model/method/positional args/keyword args.
+function odooExecute(config, model, method, args, kwargs) {
+  return xmlrpcCall(
+    config.odooUrl + '/xmlrpc/2/object',
+    'execute_kw',
+    [config.db, config.uid, config.sessionToken, model, method, args || [], kwargs || {}]
+  );
 }
 
 function xmlrpcCall(url, methodName, params) {
